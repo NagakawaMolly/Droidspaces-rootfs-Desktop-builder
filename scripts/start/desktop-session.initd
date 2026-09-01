@@ -1,0 +1,70 @@
+#!/sbin/openrc-run
+# OpenRC 桌面会话启动脚本
+# Droidspaces Desktop Session Init Script
+
+description="Droidspaces Desktop Session"
+pidfile="/var/run/desktop-session.pid"
+
+depend() {
+    need dbus udev elogind
+    after networking localmount
+}
+
+start() {
+    local desktop_user=${DESKTOP_USER:-1000}
+    local username=$(getent passwd $desktop_user | cut -d: -f1)
+    
+    if [ -z "$username" ]; then
+        eerror "Cannot find user with UID $desktop_user"
+        return 1
+    fi
+    
+    if [ ! -f /etc/droidspaces-desktop.conf ]; then
+        eerror "Desktop configuration file not found: /etc/droidspaces-desktop.conf"
+        return 1
+    fi
+    
+    ebegin "Starting Desktop Session for user $username"
+    
+    # Source desktop configuration
+    . /etc/droidspaces-desktop.conf
+    
+    # Verify desktop environment is configured
+    if [ -z "$DESKTOP" ] || [ "$DESKTOP" = "none" ]; then
+        eerror "No desktop environment configured"
+        return 1
+    fi
+    
+    # Export necessary environment variables
+    export XDG_RUNTIME_DIR="/run/user/${desktop_user}"
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${desktop_user}/bus"
+    export DISPLAY=:1
+    export XAUTHORITY="/home/${username}/.Xauthority"
+    
+    # Create runtime directories
+    mkdir -p "${XDG_RUNTIME_DIR}"
+    chown "${desktop_user}:${desktop_user}" "${XDG_RUNTIME_DIR}"
+    chmod 0700 "${XDG_RUNTIME_DIR}"
+    
+    # Load desktop-specific environment from profile
+    if [ -f "/usr/local/lib/droidspaces/desktops/${DESKTOP}.sh" ]; then
+        # Source the desktop profile to load environment variables
+        (
+            export ROOTFS_DIR=""
+            . "/usr/local/lib/droidspaces/desktops/${DESKTOP}.sh" configure-environment "$DISPLAY_BACKEND"
+        )
+    fi
+    
+    # Start the desktop session via start-desktop-session wrapper
+    start-stop-daemon --start --make-pidfile --pidfile "$pidfile" \
+        --user "$desktop_user" \
+        --exec /usr/local/bin/start-desktop-session
+    
+    eend $?
+}
+
+stop() {
+    ebegin "Stopping Desktop Session"
+    start-stop-daemon --stop --pidfile "$pidfile"
+    eend $?
+}
